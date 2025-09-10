@@ -37,6 +37,7 @@ def database_status():
     """Check database status and table information"""
     try:
         # Test connection
+        from sqlalchemy import text
         db.session.execute(text('SELECT 1'))
         db.session.commit()
         

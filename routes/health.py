@@ -1,22 +1,22 @@
 from flask import Blueprint, jsonify
-import os
-import requests
 from models import db
-from services.auth_service import auth_service
-from services.channel_service import channel_service
-from services.telegive_service import telegive_service
+import requests
+import logging
+from services import auth_service, channel_service, telegive_service
+
+logger = logging.getLogger(__name__)
 
 health_bp = Blueprint('health', __name__)
 
 @health_bp.route('/health', methods=['GET'])
 def health_check():
-    """Health check endpoint"""
+    """Comprehensive health check"""
     try:
         health_status = {
-            'status': 'healthy',
             'service': 'participant-service',
+            'status': 'healthy',
             'version': '1.0.0',
-            'database': 'disconnected',
+            'database': 'unknown',
             'external_services': {
                 'auth_service': 'unknown',
                 'channel_service': 'unknown',
@@ -26,13 +26,17 @@ def health_check():
             'winner_selection': 'operational'
         }
         
-        # Check database connection
+        # Test database connection
         try:
-            db.session.execute('SELECT 1')
-            health_status['database'] = 'connected'
+            from sqlalchemy import text
+            db.session.execute(text('SELECT 1'))
+            db.session.commit()
+            database_status = "connected"
         except Exception as e:
-            health_status['database'] = f'error: {str(e)}'
+            database_status = f"error: {str(e)}"
             health_status['status'] = 'unhealthy'
+        
+        health_status['database'] = database_status
         
         # Check external services
         external_services = {
@@ -48,55 +52,44 @@ def health_check():
                     health_status['external_services'][service_name] = 'accessible'
                 else:
                     health_status['external_services'][service_name] = f'error: HTTP {response.status_code}'
-            except requests.RequestException as e:
+            except Exception as e:
                 health_status['external_services'][service_name] = f'error: {str(e)}'
         
-        # Check captcha system
+        # Test captcha system
         try:
             from utils.captcha_generator import captcha_generator
             question, answer = captcha_generator.generate_question()
-            if question and isinstance(answer, int):
-                health_status['captcha_system'] = 'operational'
-            else:
-                health_status['captcha_system'] = 'error: invalid generation'
-                health_status['status'] = 'degraded'
+            if not question or not isinstance(answer, int):
+                health_status['captcha_system'] = 'error'
+                health_status['status'] = 'unhealthy'
         except Exception as e:
             health_status['captcha_system'] = f'error: {str(e)}'
-            health_status['status'] = 'degraded'
+            health_status['status'] = 'unhealthy'
         
-        # Check winner selection
+        # Test winner selection
         try:
-            from utils.winner_selection import winner_selector
+            from utils.winner_selection import select_winners_cryptographic
             test_participants = [1, 2, 3, 4, 5]
-            test_winners = winner_selector.select_winners_cryptographic(test_participants, 2)
-            if len(test_winners) == 2 and all(w in test_participants for w in test_winners):
-                health_status['winner_selection'] = 'operational'
-            else:
-                health_status['winner_selection'] = 'error: invalid selection'
-                health_status['status'] = 'degraded'
+            winners = select_winners_cryptographic(test_participants, 2)
+            if len(winners) != 2:
+                health_status['winner_selection'] = 'error'
+                health_status['status'] = 'unhealthy'
         except Exception as e:
             health_status['winner_selection'] = f'error: {str(e)}'
-            health_status['status'] = 'degraded'
+            health_status['status'] = 'unhealthy'
         
         # Determine overall status
-        if health_status['database'] != 'connected':
+        if health_status['database'].startswith('error'):
             health_status['status'] = 'unhealthy'
-        elif any('error:' in status for status in health_status['external_services'].values()):
-            if health_status['status'] == 'healthy':
-                health_status['status'] = 'degraded'
         
-        # Return appropriate HTTP status code
-        if health_status['status'] == 'healthy':
-            return jsonify(health_status), 200
-        elif health_status['status'] == 'degraded':
-            return jsonify(health_status), 200  # Still operational but with issues
-        else:
-            return jsonify(health_status), 503  # Service unavailable
+        status_code = 200 if health_status['status'] == 'healthy' else 503
+        return jsonify(health_status), status_code
         
     except Exception as e:
+        logger.error(f"Health check failed: {e}")
         return jsonify({
-            'status': 'unhealthy',
             'service': 'participant-service',
+            'status': 'unhealthy',
             'version': '1.0.0',
             'error': f'Health check failed: {str(e)}'
         }), 503
@@ -105,40 +98,35 @@ def health_check():
 def detailed_health_check():
     """Detailed health check with more information"""
     try:
-        from models import Participant, UserCaptchaRecord, CaptchaSession, WinnerSelectionLog
-        
-        detailed_status = {
-            'status': 'healthy',
+        health_info = {
             'service': 'participant-service',
+            'status': 'healthy',
             'version': '1.0.0',
             'timestamp': None,
             'database': {
-                'status': 'disconnected',
+                'status': 'unknown',
                 'tables': {}
             },
-            'statistics': {
-                'total_participants': 0,
-                'total_users_with_captcha': 0,
-                'active_captcha_sessions': 0,
-                'total_winner_selections': 0
-            },
-            'configuration': {
-                'captcha_timeout_minutes': os.getenv('CAPTCHA_TIMEOUT_MINUTES', 10),
-                'captcha_max_attempts': os.getenv('CAPTCHA_MAX_ATTEMPTS', 3),
-                'selection_method': os.getenv('SELECTION_METHOD', 'cryptographic_random'),
-                'audit_enabled': os.getenv('SELECTION_AUDIT_ENABLED', 'true')
+            'external_services': {},
+            'system_checks': {
+                'captcha_generator': 'unknown',
+                'winner_selection': 'unknown',
+                'input_validation': 'unknown'
             }
         }
         
         from datetime import datetime
-        detailed_status['timestamp'] = datetime.utcnow().isoformat()
+        health_info['timestamp'] = datetime.utcnow().isoformat()
         
-        # Check database and get statistics
+        # Database checks
         try:
-            db.session.execute('SELECT 1')
-            detailed_status['database']['status'] = 'connected'
+            from sqlalchemy import text
+            db.session.execute(text('SELECT 1'))
+            db.session.commit()
+            health_info['database']['status'] = 'connected'
             
-            # Check each table
+            # Check tables
+            from models import Participant, UserCaptchaRecord, CaptchaSession, WinnerSelectionLog
             tables = {
                 'participants': Participant,
                 'user_captcha_records': UserCaptchaRecord,
@@ -149,41 +137,90 @@ def detailed_health_check():
             for table_name, model in tables.items():
                 try:
                     count = model.query.count()
-                    detailed_status['database']['tables'][table_name] = {
-                        'status': 'accessible',
+                    health_info['database']['tables'][table_name] = {
+                        'exists': True,
                         'record_count': count
                     }
                 except Exception as e:
-                    detailed_status['database']['tables'][table_name] = {
-                        'status': f'error: {str(e)}',
-                        'record_count': 0
+                    health_info['database']['tables'][table_name] = {
+                        'exists': False,
+                        'error': str(e)
                     }
-                    detailed_status['status'] = 'degraded'
-            
-            # Get statistics
-            detailed_status['statistics']['total_participants'] = Participant.query.count()
-            detailed_status['statistics']['total_users_with_captcha'] = UserCaptchaRecord.query.filter_by(captcha_completed=True).count()
-            detailed_status['statistics']['active_captcha_sessions'] = CaptchaSession.query.filter_by(completed=False).filter(
-                CaptchaSession.expires_at > datetime.utcnow()
-            ).count()
-            detailed_status['statistics']['total_winner_selections'] = WinnerSelectionLog.query.count()
-            
+                    
         except Exception as e:
-            detailed_status['database']['status'] = f'error: {str(e)}'
-            detailed_status['status'] = 'unhealthy'
+            health_info['database']['status'] = f'error: {str(e)}'
+            health_info['status'] = 'unhealthy'
         
-        # Return appropriate HTTP status code
-        if detailed_status['status'] == 'healthy':
-            return jsonify(detailed_status), 200
-        elif detailed_status['status'] == 'degraded':
-            return jsonify(detailed_status), 200
-        else:
-            return jsonify(detailed_status), 503
+        # External service checks
+        external_services = {
+            'auth_service': auth_service.base_url,
+            'channel_service': channel_service.base_url,
+            'telegive_service': telegive_service.base_url
+        }
+        
+        for service_name, service_url in external_services.items():
+            try:
+                response = requests.get(f'{service_url}/health', timeout=5)
+                health_info['external_services'][service_name] = {
+                    'url': service_url,
+                    'status_code': response.status_code,
+                    'accessible': response.status_code == 200,
+                    'response_time': response.elapsed.total_seconds()
+                }
+            except Exception as e:
+                health_info['external_services'][service_name] = {
+                    'url': service_url,
+                    'accessible': False,
+                    'error': str(e)
+                }
+        
+        # System component checks
+        try:
+            from utils.captcha_generator import captcha_generator
+            question, answer = captcha_generator.generate_question()
+            if question and isinstance(answer, int):
+                health_info['system_checks']['captcha_generator'] = 'operational'
+            else:
+                health_info['system_checks']['captcha_generator'] = 'error'
+                health_info['status'] = 'unhealthy'
+        except Exception as e:
+            health_info['system_checks']['captcha_generator'] = f'error: {str(e)}'
+            health_info['status'] = 'unhealthy'
+        
+        try:
+            from utils.winner_selection import select_winners_cryptographic
+            test_participants = [1, 2, 3, 4, 5]
+            winners = select_winners_cryptographic(test_participants, 2)
+            if len(winners) == 2:
+                health_info['system_checks']['winner_selection'] = 'operational'
+            else:
+                health_info['system_checks']['winner_selection'] = 'error'
+                health_info['status'] = 'unhealthy'
+        except Exception as e:
+            health_info['system_checks']['winner_selection'] = f'error: {str(e)}'
+            health_info['status'] = 'unhealthy'
+        
+        try:
+            from utils.validation import input_validator
+            test_data = {'giveaway_id': 123, 'user_id': 456789012, 'username': 'testuser'}
+            result = input_validator.validate_participation_request(test_data)
+            if result['valid']:
+                health_info['system_checks']['input_validation'] = 'operational'
+            else:
+                health_info['system_checks']['input_validation'] = 'error'
+                health_info['status'] = 'unhealthy'
+        except Exception as e:
+            health_info['system_checks']['input_validation'] = f'error: {str(e)}'
+            health_info['status'] = 'unhealthy'
+        
+        status_code = 200 if health_info['status'] == 'healthy' else 503
+        return jsonify(health_info), status_code
         
     except Exception as e:
+        logger.error(f"Detailed health check failed: {e}")
         return jsonify({
-            'status': 'unhealthy',
             'service': 'participant-service',
+            'status': 'unhealthy',
             'version': '1.0.0',
             'error': f'Detailed health check failed: {str(e)}'
         }), 503
@@ -193,7 +230,8 @@ def readiness_check():
     """Readiness check for Kubernetes/deployment"""
     try:
         # Check database connection
-        db.session.execute('SELECT 1')
+        from sqlalchemy import text
+        db.session.execute(text('SELECT 1'))
         db.session.commit()
         
         # Check if tables exist
@@ -218,17 +256,8 @@ def readiness_check():
 @health_bp.route('/health/live', methods=['GET'])
 def liveness_check():
     """Liveness check for Kubernetes/deployment"""
-    try:
-        # Basic liveness check - service is running
-        return jsonify({
-            'status': 'alive',
-            'service': 'participant-service'
-        }), 200
-        
-    except Exception as e:
-        return jsonify({
-            'status': 'dead',
-            'service': 'participant-service',
-            'error': str(e)
-        }), 503
+    return jsonify({
+        'status': 'alive',
+        'service': 'participant-service'
+    }), 200
 
