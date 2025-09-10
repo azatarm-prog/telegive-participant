@@ -7,7 +7,7 @@ python-dotenv==1.0.0
 gunicorn==21.2.0
 pytest==7.4.2
 pytest-asyncio==0.21.1
-aiohttp==3.8.5
+aiohttp==3.9.1
 redis==4.6.0
 APScheduler==3.10.4
 
