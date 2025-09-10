@@ -192,19 +192,27 @@ def detailed_health_check():
 def readiness_check():
     """Readiness check for Kubernetes/deployment"""
     try:
-        # Check if service is ready to accept requests
+        # Check database connection
         db.session.execute('SELECT 1')
+        db.session.commit()
+        
+        # Check if tables exist
+        from models import Participant
+        Participant.query.limit(1).all()
         
         return jsonify({
             'status': 'ready',
-            'service': 'participant-service'
+            'service': 'participant-service',
+            'database': 'connected',
+            'tables': 'initialized'
         }), 200
         
     except Exception as e:
         return jsonify({
             'status': 'not_ready',
             'service': 'participant-service',
-            'error': str(e)
+            'error': str(e),
+            'database': 'disconnected'
         }), 503
 
 @health_bp.route('/health/live', methods=['GET'])

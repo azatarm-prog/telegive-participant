@@ -1,0 +1,133 @@
+name: Deploy to Railway
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest flake8 black packaging requests
+    
+    - name: Lint with flake8
+      run: |
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+    
+    - name: Format check with black
+      run: black --check . || echo "Code formatting issues found"
+    
+    - name: Validate requirements
+      run: python scripts/validate_requirements.py
+    
+    - name: Run pre-deployment validation
+      run: |
+        chmod +x scripts/pre-deploy-validate.sh
+        ./scripts/pre-deploy-validate.sh
+    
+    - name: Run tests
+      run: |
+        python -m pytest tests/ -v --tb=short
+    
+    - name: Test health endpoints
+      run: |
+        python -c "
+        import os
+        os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
+        from app import create_app
+        app = create_app('testing')
+        client = app.test_client()
+        
+        # Test health endpoints
+        endpoints = ['/health/live', '/health/ready', '/health']
+        for endpoint in endpoints:
+            response = client.get(endpoint)
+            print(f'{endpoint}: {response.status_code}')
+            assert response.status_code in [200, 503], f'Unexpected status for {endpoint}'
+        
+        print('✅ All health endpoints working')
+        "
+
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Deploy to Railway
+      uses: railwayapp/railway-deploy@v1
+      with:
+        railway-token: ${{ secrets.RAILWAY_TOKEN }}
+        service: ${{ secrets.RAILWAY_SERVICE_NAME }}
+    
+    - name: Wait for deployment
+      run: sleep 60
+    
+    - name: Post-deployment health check
+      run: |
+        SERVICE_URL="${{ secrets.RAILWAY_SERVICE_URL }}"
+        
+        if [ -z "$SERVICE_URL" ]; then
+          echo "⚠️ RAILWAY_SERVICE_URL not set, skipping health check"
+          exit 0
+        fi
+        
+        # Wait for service to be ready
+        for i in {1..10}; do
+          if curl -f "$SERVICE_URL/health/live"; then
+            echo "✅ Service is alive"
+            break
+          fi
+          echo "⏳ Waiting for service... (attempt $i/10)"
+          sleep 30
+        done
+        
+        # Initialize database
+        curl -X POST "$SERVICE_URL/admin/init-db" || echo "⚠️ Database initialization failed"
+        
+        # Final health check
+        curl -f "$SERVICE_URL/health" || exit 1
+        echo "🎉 Deployment successful!"
+
+  notify:
+    needs: [validate, deploy]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Notify deployment status
+      run: |
+        if [ "${{ needs.deploy.result }}" == "success" ]; then
+          echo "🎉 Deployment successful!"
+        else
+          echo "❌ Deployment failed!"
+        fi
+

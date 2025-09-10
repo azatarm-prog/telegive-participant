@@ -4,7 +4,7 @@ from flask import Flask
 from flask_cors import CORS
 from config import config
 from models import db
-from routes import participants_bp, captcha_bp, health_bp
+from routes import participants_bp, captcha_bp, health_bp, admin_bp
 
 def create_app(config_name=None):
     """Application factory pattern"""
@@ -33,6 +33,7 @@ def create_app(config_name=None):
     app.register_blueprint(participants_bp)
     app.register_blueprint(captcha_bp)
     app.register_blueprint(health_bp)
+    app.register_blueprint(admin_bp)
     
     # Create database tables
     with app.app_context():
