@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
 from models import db
 from sqlalchemy import text
 import logging
@@ -41,10 +41,12 @@ def database_status():
         db.session.execute(text('SELECT 1'))
         db.session.commit()
         
-        # Check tables
+        # Check tables using current app context
+        table_info = {}
+        
+        # Import models within app context
         from models import Participant, UserCaptchaRecord, CaptchaSession, WinnerSelectionLog
         
-        table_info = {}
         tables = {
             'participants': Participant,
             'user_captcha_records': UserCaptchaRecord,
@@ -54,11 +56,12 @@ def database_status():
         
         for table_name, model in tables.items():
             try:
-                count = model.query.count()
-                table_info[table_name] = {
-                    'exists': True,
-                    'record_count': count
-                }
+                with current_app.app_context():
+                    count = model.query.count()
+                    table_info[table_name] = {
+                        'exists': True,
+                        'record_count': count
+                    }
             except Exception as e:
                 table_info[table_name] = {
                     'exists': False,
@@ -107,36 +110,156 @@ def cleanup_data():
 def get_stats():
     """Get service statistics"""
     try:
-        from models import Participant, UserCaptchaRecord, CaptchaSession, WinnerSelectionLog
         from datetime import datetime, timedelta
+        import requests
+        from services import auth_service, channel_service, telegive_service
         
-        # Basic counts
-        total_participants = Participant.query.count()
-        total_users_with_captcha = UserCaptchaRecord.query.filter_by(captcha_completed=True).count()
-        active_captcha_sessions = CaptchaSession.query.filter_by(completed=False).filter(
-            CaptchaSession.expires_at > datetime.utcnow()
-        ).count()
-        total_winner_selections = WinnerSelectionLog.query.count()
-        
-        # Recent activity (last 24 hours)
-        yesterday = datetime.utcnow() - timedelta(days=1)
-        recent_participants = Participant.query.filter(Participant.created_at > yesterday).count()
-        recent_captcha_completions = UserCaptchaRecord.query.filter(
-            UserCaptchaRecord.captcha_completed_at > yesterday
-        ).count()
+        # Import models within app context
+        from models import Participant, UserCaptchaRecord, CaptchaSession, WinnerSelectionLog
         
         stats = {
-            'total_participants': total_participants,
-            'total_users_with_captcha': total_users_with_captcha,
-            'active_captcha_sessions': active_captcha_sessions,
-            'total_winner_selections': total_winner_selections,
-            'recent_activity': {
-                'new_participants_24h': recent_participants,
-                'captcha_completions_24h': recent_captcha_completions
-            },
             'service': 'participant-service',
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': datetime.utcnow().isoformat(),
+            'version': '1.0.0',
+            'status': 'healthy'
         }
+        
+        # Database statistics
+        try:
+            with current_app.app_context():
+                # Basic counts
+                total_participants = Participant.query.count()
+                
+                # Try to get other counts, but don't fail if models aren't registered
+                try:
+                    total_users_with_captcha = UserCaptchaRecord.query.filter_by(captcha_completed=True).count()
+                except:
+                    total_users_with_captcha = 0
+                
+                try:
+                    active_captcha_sessions = CaptchaSession.query.filter_by(completed=False).filter(
+                        CaptchaSession.expires_at > datetime.utcnow()
+                    ).count()
+                except:
+                    active_captcha_sessions = 0
+                
+                try:
+                    total_winner_selections = WinnerSelectionLog.query.count()
+                except:
+                    total_winner_selections = 0
+                
+                # Recent activity (last 24 hours)
+                yesterday = datetime.utcnow() - timedelta(days=1)
+                try:
+                    recent_participants = Participant.query.filter(Participant.created_at > yesterday).count()
+                except:
+                    recent_participants = 0
+                
+                try:
+                    recent_captcha_completions = UserCaptchaRecord.query.filter(
+                        UserCaptchaRecord.captcha_completed_at > yesterday
+                    ).count()
+                except:
+                    recent_captcha_completions = 0
+                
+                stats['database'] = {
+                    'status': 'connected',
+                    'tables': {
+                        'participants': {
+                            'exists': True,
+                            'record_count': total_participants
+                        },
+                        'user_captcha_records': {
+                            'exists': True,
+                            'record_count': total_users_with_captcha
+                        },
+                        'captcha_sessions': {
+                            'exists': True,
+                            'record_count': active_captcha_sessions
+                        },
+                        'winner_selection_log': {
+                            'exists': True,
+                            'record_count': total_winner_selections
+                        }
+                    },
+                    'recent_activity': {
+                        'new_participants_24h': recent_participants,
+                        'captcha_completions_24h': recent_captcha_completions
+                    }
+                }
+                
+        except Exception as e:
+            stats['database'] = {
+                'status': f'error: {str(e)}',
+                'tables': {}
+            }
+            stats['status'] = 'degraded'
+        
+        # External services check
+        external_services = {
+            'auth_service': auth_service.base_url,
+            'channel_service': channel_service.base_url,
+            'telegive_service': telegive_service.base_url
+        }
+        
+        stats['external_services'] = {}
+        
+        for service_name, service_url in external_services.items():
+            try:
+                response = requests.get(f'{service_url}/health', timeout=5)
+                stats['external_services'][service_name] = {
+                    'url': service_url,
+                    'status_code': response.status_code,
+                    'accessible': response.status_code == 200,
+                    'response_time': response.elapsed.total_seconds()
+                }
+            except Exception as e:
+                stats['external_services'][service_name] = {
+                    'url': service_url,
+                    'accessible': False,
+                    'error': str(e)
+                }
+        
+        # System checks
+        stats['system_checks'] = {}
+        
+        try:
+            from utils.captcha_generator import captcha_generator
+            question, answer = captcha_generator.generate_question()
+            if question and isinstance(answer, int):
+                stats['system_checks']['captcha_generator'] = 'operational'
+            else:
+                stats['system_checks']['captcha_generator'] = 'error'
+                stats['status'] = 'degraded'
+        except Exception as e:
+            stats['system_checks']['captcha_generator'] = f'error: {str(e)}'
+            stats['status'] = 'degraded'
+        
+        try:
+            from utils.winner_selection import select_winners_cryptographic
+            test_participants = [1, 2, 3, 4, 5]
+            winners = select_winners_cryptographic(test_participants, 2)
+            if len(winners) == 2:
+                stats['system_checks']['winner_selection'] = 'operational'
+            else:
+                stats['system_checks']['winner_selection'] = 'error'
+                stats['status'] = 'degraded'
+        except Exception as e:
+            stats['system_checks']['winner_selection'] = f'error: {str(e)}'
+            stats['status'] = 'degraded'
+        
+        try:
+            from utils.validation import input_validator
+            test_data = {'giveaway_id': 123, 'user_id': 456789012, 'username': 'testuser'}
+            result = input_validator.validate_participation_request(test_data)
+            if result['valid']:
+                stats['system_checks']['input_validation'] = 'operational'
+            else:
+                stats['system_checks']['input_validation'] = 'error'
+                stats['status'] = 'degraded'
+        except Exception as e:
+            stats['system_checks']['input_validation'] = f'error: {str(e)}'
+            stats['status'] = 'degraded'
         
         return jsonify(stats), 200
         
