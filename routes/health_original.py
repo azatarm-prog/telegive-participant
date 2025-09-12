@@ -1,88 +1,85 @@
 from flask import Blueprint, jsonify
 from models import db
+import requests
 import logging
-from datetime import datetime
+from services import auth_service, channel_service, telegive_service
 
 logger = logging.getLogger(__name__)
 
 health_bp = Blueprint('health', __name__)
 
-@health_bp.route('/health/live', methods=['GET'])
-def liveness_check():
-    """Ultra-fast liveness check - no external calls"""
-    return jsonify({
-        'status': 'alive',
-        'service': 'participant-service'
-    }), 200
-
-@health_bp.route('/health/ready', methods=['GET'])
-def readiness_check():
-    """Fast readiness check - only essential database test"""
-    try:
-        # Quick database ping only
-        from sqlalchemy import text
-        db.session.execute(text('SELECT 1'))
-        db.session.commit()
-        
-        return jsonify({
-            'status': 'ready',
-            'service': 'participant-service',
-            'database': 'connected'
-        }), 200
-        
-    except Exception as e:
-        return jsonify({
-            'status': 'not_ready',
-            'service': 'participant-service',
-            'error': str(e),
-            'database': 'disconnected'
-        }), 503
-
 @health_bp.route('/health', methods=['GET'])
-def health_check_fast():
-    """Fast health check - minimal external calls"""
+def health_check():
+    """Comprehensive health check"""
     try:
         health_status = {
             'service': 'participant-service',
             'status': 'healthy',
             'version': '1.0.0',
-            'timestamp': datetime.utcnow().isoformat()
+            'database': 'unknown',
+            'external_services': {
+                'auth_service': 'unknown',
+                'channel_service': 'unknown',
+                'telegive_service': 'unknown'
+            },
+            'captcha_system': 'operational',
+            'winner_selection': 'operational'
         }
         
-        # Quick database test only
+        # Test database connection
         try:
             from sqlalchemy import text
             db.session.execute(text('SELECT 1'))
             db.session.commit()
-            health_status['database'] = 'connected'
+            database_status = "connected"
         except Exception as e:
-            health_status['database'] = f'error: {str(e)}'
+            database_status = f"error: {str(e)}"
             health_status['status'] = 'unhealthy'
         
-        # Quick system checks (no external calls)
+        health_status['database'] = database_status
+        
+        # Check external services
+        external_services = {
+            'auth_service': auth_service.base_url,
+            'channel_service': channel_service.base_url,
+            'telegive_service': telegive_service.base_url
+        }
+        
+        for service_name, service_url in external_services.items():
+            try:
+                response = requests.get(f'{service_url}/health', timeout=5)
+                if response.status_code == 200:
+                    health_status['external_services'][service_name] = 'accessible'
+                else:
+                    health_status['external_services'][service_name] = f'error: HTTP {response.status_code}'
+            except Exception as e:
+                health_status['external_services'][service_name] = f'error: {str(e)}'
+        
+        # Test captcha system
         try:
             from utils.captcha_generator import captcha_generator
             question, answer = captcha_generator.generate_question()
-            if question and isinstance(answer, int):
-                health_status['captcha_system'] = 'operational'
-            else:
+            if not question or not isinstance(answer, int):
                 health_status['captcha_system'] = 'error'
                 health_status['status'] = 'unhealthy'
         except Exception as e:
             health_status['captcha_system'] = f'error: {str(e)}'
             health_status['status'] = 'unhealthy'
         
+        # Test winner selection
         try:
             from utils.winner_selection import select_winners_cryptographic
             test_participants = [1, 2, 3, 4, 5]
             winners = select_winners_cryptographic(test_participants, 2)
-            if len(winners) == 2:
-                health_status['winner_selection'] = 'operational'
-            else:
+            if len(winners) != 2:
                 health_status['winner_selection'] = 'error'
                 health_status['status'] = 'unhealthy'
         except Exception as e:
             health_status['winner_selection'] = f'error: {str(e)}'
+            health_status['status'] = 'unhealthy'
+        
+        # Determine overall status
+        if health_status['database'].startswith('error'):
             health_status['status'] = 'unhealthy'
         
         status_code = 200 if health_status['status'] == 'healthy' else 503
@@ -99,18 +96,16 @@ def health_check_fast():
 
 @health_bp.route('/health/detailed', methods=['GET'])
 def detailed_health_check():
-    """Detailed health check with external services - USE SPARINGLY"""
+    """Detailed health check with more information"""
     try:
-        import requests
-        from services import auth_service, channel_service, telegive_service
-        
         health_info = {
             'service': 'participant-service',
             'status': 'healthy',
             'version': '1.0.0',
-            'timestamp': datetime.utcnow().isoformat(),
+            'timestamp': None,
             'database': {
-                'status': 'unknown'
+                'status': 'unknown',
+                'tables': {}
             },
             'external_services': {},
             'system_checks': {
@@ -120,17 +115,43 @@ def detailed_health_check():
             }
         }
         
+        from datetime import datetime
+        health_info['timestamp'] = datetime.utcnow().isoformat()
+        
         # Database checks
         try:
             from sqlalchemy import text
             db.session.execute(text('SELECT 1'))
             db.session.commit()
             health_info['database']['status'] = 'connected'
+            
+            # Check tables
+            from models import Participant, UserCaptchaRecord, CaptchaSession, WinnerSelectionLog
+            tables = {
+                'participants': Participant,
+                'user_captcha_records': UserCaptchaRecord,
+                'captcha_sessions': CaptchaSession,
+                'winner_selection_log': WinnerSelectionLog
+            }
+            
+            for table_name, model in tables.items():
+                try:
+                    count = model.query.count()
+                    health_info['database']['tables'][table_name] = {
+                        'exists': True,
+                        'record_count': count
+                    }
+                except Exception as e:
+                    health_info['database']['tables'][table_name] = {
+                        'exists': False,
+                        'error': str(e)
+                    }
+                    
         except Exception as e:
             health_info['database']['status'] = f'error: {str(e)}'
             health_info['status'] = 'unhealthy'
         
-        # External service checks with reduced timeout
+        # External service checks
         external_services = {
             'auth_service': auth_service.base_url,
             'channel_service': channel_service.base_url,
@@ -139,8 +160,7 @@ def detailed_health_check():
         
         for service_name, service_url in external_services.items():
             try:
-                # Reduced timeout from 5s to 2s
-                response = requests.get(f'{service_url}/health', timeout=2)
+                response = requests.get(f'{service_url}/health', timeout=5)
                 health_info['external_services'][service_name] = {
                     'url': service_url,
                     'status_code': response.status_code,
@@ -204,4 +224,40 @@ def detailed_health_check():
             'version': '1.0.0',
             'error': f'Detailed health check failed: {str(e)}'
         }), 503
+
+@health_bp.route('/health/ready', methods=['GET'])
+def readiness_check():
+    """Readiness check for Kubernetes/deployment"""
+    try:
+        # Check database connection
+        from sqlalchemy import text
+        db.session.execute(text('SELECT 1'))
+        db.session.commit()
+        
+        # Check if tables exist
+        from models import Participant
+        Participant.query.limit(1).all()
+        
+        return jsonify({
+            'status': 'ready',
+            'service': 'participant-service',
+            'database': 'connected',
+            'tables': 'initialized'
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'not_ready',
+            'service': 'participant-service',
+            'error': str(e),
+            'database': 'disconnected'
+        }), 503
+
+@health_bp.route('/health/live', methods=['GET'])
+def liveness_check():
+    """Liveness check for Kubernetes/deployment"""
+    return jsonify({
+        'status': 'alive',
+        'service': 'participant-service'
+    }), 200
 
