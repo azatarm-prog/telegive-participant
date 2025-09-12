@@ -6,7 +6,7 @@ class AuthService:
     """Service for communicating with the Auth Service"""
     
     def __init__(self):
-        self.base_url = os.getenv('TELEGIVE_AUTH_URL', 'https://telegive-auth.railway.app')
+        self.base_url = os.getenv('TELEGIVE_AUTH_URL', 'https://web-production-ddd7e.up.railway.app')
         self.service_name = os.getenv('SERVICE_NAME', 'participant-service')
     
     def get_service_headers(self) -> Dict[str, str]:
