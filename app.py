@@ -10,6 +10,7 @@ from routes.admin_optimized import admin_optimized_bp
 from routes.participants_enhanced import participants_bp as participants_enhanced_bp
 from routes.participants_bot_service import bot_service_bp
 from routes.bot_service_final import bot_service_final_bp
+from routes.participants_bot_integration import participants_bot_bp
 
 def create_app(config_name=None):
     """Application factory pattern"""
@@ -39,6 +40,7 @@ def create_app(config_name=None):
     app.register_blueprint(participants_enhanced_bp)  # Enhanced Bot Service endpoints
     app.register_blueprint(bot_service_bp)  # Working Bot Service endpoints
     app.register_blueprint(bot_service_final_bp)  # Final working Bot Service endpoints (v2)
+    app.register_blueprint(participants_bot_bp)  # EXACT Bot Service integration endpoints
     app.register_blueprint(captcha_bp)
     app.register_blueprint(health_optimized_bp)  # Optimized health endpoints
     app.register_blueprint(admin_optimized_bp)  # Optimized admin endpoints
