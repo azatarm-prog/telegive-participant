@@ -1,5 +1,4 @@
-from flask import Blueprint, request, jsonify
-from models import db, Participant, UserCaptchaRecord, CaptchaSession, WinnerSelectionLog
+from flask import Blueprint, request, jsonify, current_app
 from datetime import datetime, timedelta
 import secrets
 import logging
@@ -8,7 +7,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
-participants_bp = Blueprint('participants', __name__)
+participants_bp = Blueprint('participants_enhanced', __name__)
 
 def log_api_call(endpoint, user_id=None, giveaway_id=None, success=True, error=None):
     """Log all API calls for debugging and analytics"""
@@ -21,6 +20,9 @@ def register_participant():
     Handles both new users (captcha required) and returning users
     """
     try:
+        # Import models within app context
+        from models import db, Participant, UserCaptchaRecord, CaptchaSession
+        
         data = request.get_json()
         
         # Validate required fields
@@ -129,6 +131,9 @@ def get_captcha_status(user_id):
     Used by Bot Service to optimize participation flow
     """
     try:
+        # Import models within app context
+        from models import db, UserCaptchaRecord
+        
         captcha_record = UserCaptchaRecord.query.filter_by(user_id=user_id).first()
         
         if captcha_record:
