@@ -4,7 +4,9 @@ from flask import Flask
 from flask_cors import CORS
 from config import config
 from models import db
-from routes import participants_bp, captcha_bp, health_bp, admin_bp
+from routes import participants_bp, captcha_bp
+from routes.health_optimized import health_optimized_bp
+from routes.admin_optimized import admin_optimized_bp
 from routes.participants_enhanced import participants_bp as participants_enhanced_bp
 from routes.participants_bot_service import bot_service_bp
 
@@ -36,8 +38,8 @@ def create_app(config_name=None):
     app.register_blueprint(participants_enhanced_bp)  # Enhanced Bot Service endpoints
     app.register_blueprint(bot_service_bp)  # Working Bot Service endpoints
     app.register_blueprint(captcha_bp)
-    app.register_blueprint(health_bp)
-    app.register_blueprint(admin_bp)
+    app.register_blueprint(health_optimized_bp)  # Optimized health endpoints
+    app.register_blueprint(admin_optimized_bp)  # Optimized admin endpoints
     
     # Create database tables
     with app.app_context():
