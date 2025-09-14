@@ -8,12 +8,14 @@ class AuthService:
     def __init__(self):
         self.base_url = os.getenv('TELEGIVE_AUTH_URL', 'https://web-production-ddd7e.up.railway.app')
         self.service_name = os.getenv('SERVICE_NAME', 'participant-service')
+        self.service_token = os.getenv('AUTH_SERVICE_TOKEN', 'ch4nn3l_s3rv1c3_t0k3n_2025_s3cur3_r4nd0m_str1ng')
     
     def get_service_headers(self) -> Dict[str, str]:
-        """Get headers for inter-service communication"""
+        """Get headers for inter-service communication with authentication"""
         return {
             'Content-Type': 'application/json',
             'X-Service-Name': self.service_name,
+            'X-Service-Token': self.service_token,
             'User-Agent': f'{self.service_name}/1.0.0'
         }
     
